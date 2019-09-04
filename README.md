@@ -1,150 +1,117 @@
-# XAsset 
+# xasset
 
-XAsset 为 Unity 项目提供了一套简便的资源管理环境，借助 XAsset，你可以很轻易的在 Unity 项目中对 AssetBundle 资源进行 打包、更新、加载、和回收。
+xasset 提供了一种使用资源路径的简单的方式来加载资源，简化了Unity项目资源打包，更新，加载，和回收的作业流程
+- 主页：https://github.com/xasset/xasset
+- 支持：[693203087](https://jq.qq.com/?_wv=1027&k=5DyV09a) （QQ群，可点击加入）
 
-#### 主要特点
-* 自动化的资源依赖和生命周期管理：XAsset 内部会自动处理资源的依赖和变种加载逻辑，同时利用了基于引用计数的资源依赖加载策略，让同一份资源不会被重复加载亦不会轻易卸载，从而让资源管理变得更简单稳健，让大家不在对一大堆资源依赖和生命周期管理烦恼。
+## 主要特点
+- 集成了官方的 [AssetBundleBrowser](https://docs.unity3d.com/Manual/AssetBundles-Browser.html)，支持可视化的资源冗余预警，以及拖拽式的批量打包粒度调整
+- 提供了场景以及常规资源的加载（同步/异步）和卸载的统一接口，并自动处理相关依赖的操作
+- 基于引用计数管理资源对象生命周期，避免重复加载和轻易卸载
+- 提供了带断点续传的资源版本更新demo
+- 支持编辑器模式，开发效率高 
 
-* 敏捷化的编辑器仿真资源加载模式：XAsset 的资源加载支持开发模式和 Bundle 模式，在开发模式下不用构建 AssetBundle 也能加载到想要的资源。同时，也可以通过启动 Bundle 模式，在编辑器下进行真实的 AssetBundle 资源加载测试，让开发效率更高。
+## 使用范例
 
-* 简便化的运行时工程资源加载机制：XAsset 使用资源在工程的相对路径取得资源，可以让逻辑层不用关注 AssetBundle，同时提供了资源路径转换代理接口，让逻辑层可以通过实现该代理接口，就能通过同一个地址获取本地或 WebServer 上的资源，让使用成本更低。
+1. 资源初始化
 
-* 批量化的可配置资源打包构建流程：XAsset 提供了一系列可配置规则的批量打包工具，在打包时会自动收集资源的依赖信息，把公共资源剥离出来单独打包，从而避免冗余。同时，只要开启 BUILD_ATLAS 宏，就会自动进行图集打包，具有一定参考价值。
+   以下代码，可以在工程的 Assets/Demo/Scripts/AssetsInit.cs 中找到
+  
+   ```c#
+   void Start()
+   {
+         /// 初始化
+       Assets.Initialize(OnInitialized, (error) => { Debug.Log(error); }); 
+   }
 
-#### 环境需求
-XAsset 基于 Unity2017.2.0 进行开发，不过也可以通过导出源码源码的方式在低版本的Unity项目中运行，但是由于 AssetBundle.LoadFromFile（Async） 在 Android 上需要 Unity5.4 才能正常运行，所以不能低于此版本，建议不要使用5.4.2，过来人经验5.6相对比较稳定。
+   private void OnInitialized()
+   {
+      var asset = Assets.Load(assetPath, typeof(UnityEngine.Object));
+      asset.completed += delegate(Asset a) 
+      {
+         if (a.name.EndsWith(".prefab", StringComparison.CurrentCulture))
+         {
+            var go = Instantiate(a.asset);
+            go.name = a.asset.name;
+            /// 设置关注对象，当关注对象销毁时，回收资源
+            a.Require(go); 
+            Destroy(go, 3);
+            /// 设置关注对象后，只需要释放一次，可以按自己的喜好调整，
+            /// 例如 ABSystem 中，不需要 调用这个 Release，
+            /// 这里如果之前没有调用 Require，下一帧这个资源就会被回收
+            a.Release();   
+         }
+      };
+   } 
+   ```
 
-#### 使用范例 
+2. 资源版本更新
 
-使用 XAsset 资源管理 API 进行资源加载和卸载
+   这里主要说明如何基于 Demo 场景进行测试资源版本更新
 
-```c#
-IEnumerator LoadAsset ()
-{
-	string assetPath = "Assets/SampleAssets/MyCube.prefab"; 
-	/// 同步模式用路径加载资源
-	var asset = Assets.Load<GameObject> (assetPath);
-	if (asset != null && asset.asset != null) {
-		var go = GameObject.Instantiate (asset.asset);
-		GameObject.Destroy (go, 1);
-	}
-	/// 卸载
-	asset.Unload ();
-	asset = null; 
+   首先，资源打包后，把 AssetsMenuItem 的 OnInitialize 替换为下面的样子：
 
-	/// 异步模式加载
-	var assetAsync = Assets.LoadAsync<GameObject> (assetPath);
-	if (assetAsync != null) {
-		yield return assetAsync;
-		if (assetAsync.asset != null) {
-			var go = GameObject.Instantiate (assetAsync.asset);
-			GameObject.Destroy (go, 1);
-		} else {
-			Debug.LogError (assetAsync.error);
-		} 
-		assetAsync.Unload ();
-		assetAsync = null;
-	}
-}
-```
+   ```c#
+   [InitializeOnLoadMethod]
+   private static void OnInitialize()
+   {
+       var settings = BuildScript.GetSettings();
+       if (settings.localServer)
+       {
+           bool isRunning = LaunchLocalServer.IsRunning();
+           if (!isRunning)
+           {
+               LaunchLocalServer.Run();
+           } 
+       }
+       else
+       {
+           bool isRunning = LaunchLocalServer.IsRunning();
+           if (isRunning)
+           {
+               LaunchLocalServer.KillRunningAssetBundleServer();
+           }
+       }
+       //Utility.dataPath = System.Environment.CurrentDirectory;
+       Utility.downloadURL = BuildScript.GetManifest().downloadURL;
+       Utility.assetBundleMode = settings.runtimeMode;
+       Utility.getPlatformDelegate = BuildScript.GetPlatformName;
+       Utility.loadDelegate = AssetDatabase.LoadAssetAtPath;
+       assetRootPath = settings.assetRootPath;
+   }
+   ```
 
-> ***注：XAsset 提供了同步/异步两种加载模式，但是为了功能能够正常运转，对于同一个资源的加载，请不要在异步加载没有完成前进行同步加载，否则同步加载的资源将得不到正常的返回。***
+   其次，上面的改动主要是注释了 `Utility.dataPath = System.Environment.CurrentDirectory;`这行代码，这样在编辑器下，xasset 会从 StreamingAssets 目录下读取资源，所以，对于构建后的资源包，我们需要执行 `Assets/AssetBundles/拷贝到StreamingAssets`复制到这个目录下
 
-为简化出包流程，XAsset 也还提供了一键输出程序包的命令，执行 "Assets/XAsset/Build Player" 可以很方便的一键输出 apk、app or exe 程序文件，文件名会根据 Unity 项目中 PlayerSettings 的 ProductName 和 BundleVersion 自动生成。
+   复制后，在编辑器下启动 Demo 场景，点击 Check 后，应该不会触发资源版本更新，停止播放后，可以修改已有的资源，例如在现有的 prefab 中添加新的内容，或者直接添加一些新的资源（这里是添加了一个新的 prefab），执行标记打包后，再次启动 Demo 场景，点击 Check 后，单步调试可以看到以下画面： ![update1](https://github.com/xasset/xasset/blob/master/Doc/update1.png)
 
+   更新完成后，Demo 中会提示更新了几个文件，如下图所示： ![update2](https://github.com/xasset/xasset/blob/master/Doc/update2.png)
 
-#### 核心文件
+   最后，以上就是基于 Demo 场景进行资源版本更新的主要流程，更多演示请参考: [xasset 框架入门指南](https://zhuanlan.zhihu.com/p/69410498)
 
-- XAsset/Assets.cs 
+## 特别说明
+1. 对于引用计数：Asset对象的每次Load需要配对的Unload/Release来回收资源，Asset在Requrire之后，不需要主动调用Unload/Release，在Require的对象被销毁时，会自动回收
 
-  提供了资源管理相关 API，让用户不需要关注 AssetBundle。主要提供了一下接口：
+## 测试环境
+- 引擎版本：Unity 5.6.7 / Unity2017.4 / Unity 2018.4
+- 语言环境：.net 3.5/.net 4.0 (4.0版本有路径问题，如果发现有报错可以先切回 3.5 环境)
+- 操作系统：macOS 10.14.5 
 
-  - Initialize 
+## 贡献成员
+- [yusjoel](https://github.com/yusjoel)
+- [hemingfei](https://github.com/hemingfei)
+- [veboys](https://github.com/veboys)
+- [woshihuo12](https://github.com/woshihuo12)
+- [CatImmortal](https://github.com/CatImmortal) 
+- [ZhangDi](https://github.com/ZhangDi2018)
+- [QuinShuai](https://github.com/QuinShuai)
+- [songtm](https://github.com/songtm)
+- [woodelfLee](https://github.com/woodelfLee)
+- [LostEarth](https://github.com/LostEarth)
+- [Coeur](https://github.com/Coeur)
+- [XINCGer](https://github.com/XINCGer)
 
-     初始化
-
-  - Load 
-
-     同步加载，阻塞主线程
-
-  - LoadAsync 
-
-     异步加载，不阻塞主线程
-
-  - Unload 
-
-     卸载资源，也可以参考上面的演示范例通过调用返回的 Asset 对象的 Unload 卸载资源
-
-  > ***注：编辑器下未激活 Bundle Mode 的时候都是同步加载***
-
-
-- XAsset/AssetsTest.cs
-
-  使用 Assets API 进行资源加载（同步/异步）和卸载的示范。
-
-
-- XAsset/Editor/AssetsMenuItem.cs
-
-   编辑器 “Assets” 菜单的定义，主要包含以下功能：
-
-   > "Assets/Copy Asset Path" 
-   >
-   > ​	复制资源的在工程中的相对路径
-   >
-   > "Assets/XAsset/Bundle Mode" 
-   >
-   > ​	编辑器下用来 激活（勾选）或关闭（反选） Bundle Mode
-   >
-   > "Assets/XAsset/Build AssetBundles"
-   >
-   > ​	构建 AssetBundles
-   >
-   > "Assets/XAsset/Build Player"
-   >
-   > ​	构建 程序包，iOS模式下会导出 xcode 工程
-
-- XAsset/Editor/BuildRule.cs
-
-   打包规则，实现了资源收集和打包（包括图集）策略，目前主要预定义了以下规则：
-
-   > BuildAssetsWithAssetBundleName 
-   >
-   > ​	将搜索到的所有资源按指定的 AssetBundleName 进行打包。
-   >
-   > BuildAssetsWithDirectroyName 
-   >
-   > ​	将搜索到的所有资源按资源所在的路径进行打包，同一个路径下的所有资源会被打到一个包。
-   >
-   > BuildAssetsWithFilename
-   > ​	将搜索到的所有资源按每个资源的文件名进行打包，每个文件一个包。
-   >
-   > ***注意：以上规则默认都会将规则中每个资源的同其非共享的所有依赖的资源打到同一个包***
-
-- XAsset/Bundles.cs 
-
-  封装了 AssetBundle 的依赖和变种的加载和释放的接口实现。
-
-- XAsset/Manifest.cs
-
-  配置文件，用来记录每个 AssetBundle 包含的所有文件。
-
-- XAsset/Editor/BuildScript.cs
-
-  打包脚本，实现了一键出包的主要流程。
-
-- XAsset/Utility.cs 
-
-  辅助工具。
-
-- XAsset/Logger.cs 
-
-  日志工具。
-
-##### 推荐阅读 #####
-1. [Assets, Resources and AssetBundles](https://unity3d.com/cn/learn/tutorials/s/best-practices ) 
-2. [如何用XAsset进行较理想的Unity项目资源打包方案？](./如何用XAsset进行较理想的Unity项目资源打包方案.md)
-3. [如何用XAsset进行资源更新](./如何用XAsset进行资源更新.md)
-
-##### 技术支持 #####
-
-QQ群：693203087
+## 推荐框架
+ - [ET](https://github.com/egametang/ET) Unity3D Client And C# Server Framework
+ - [Loxodon Framework](https://github.com/cocowolf/loxodon-framework) MVVM Framework for Unity3D(C# & XLua)
+ - [QFramework](https://github.com/liangxiegame/QFramework) Your first K.I.S.S Unity 3D Framework
